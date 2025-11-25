@@ -1,30 +1,31 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
 const axios = require('axios'); // Libreria per fare richieste HTTP a Google
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configurazione API Google
-// NOTA: In produzione è meglio usare le Variabili d'Ambiente di Render, ma per ora usiamo la chiave qui.
 const GOOGLE_API_KEY = "AIzaSyAwolKBmgcWB3ZnXgdKw4l3URu8XlnZ4i0";
 const GOOGLE_TTS_URL = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${GOOGLE_API_KEY}`;
+
+// Variabili di memoria globale
+let ultimoComando = "";
+// Salveremo il contenuto audio in Base64 direttamente qui, in memoria RAM
+let ultimoAudioBase64 = null; 
+let ultimoTestoGenerato = "";
 
 // Middleware
 app.use(cors());
 app.use(express.json());
 
-// Variabile per salvare l'ultimo comando
-let ultimoComando = "";
-
 // --- LOGGING DI AVVIO ---
 console.log("--- SERVER AVVIATO ---");
 console.log(`Porta: ${PORT}`);
-console.log("Pronto a ricevere comandi e generare audio.");
+console.log("Pronto a ricevere comandi e generare audio. (Nessun salvataggio su disco)");
 
-// 1. ROTTA POST: Riceve il testo, chiama Google, salva l'audio
+// 1. ROTTA POST: Riceve il testo, chiama Google, salva l'audio in memoria
+// Indirizzo: https://ricevi-dati-da-arduino-e-invia.onrender.com/api/comando
 app.post('/api/comando', async (req, res) => {
     const messaggioRicevuto = req.body.messaggio;
 
@@ -36,44 +37,36 @@ app.post('/api/comando', async (req, res) => {
         return res.status(400).json({ status: 'errore', motivo: 'Messaggio vuoto' });
     }
 
-    ultimoComando = messaggioRicevuto;
+    ultimoTestoGenerato = messaggioRicevuto;
 
     try {
         // STEP 2: Preparazione chiamata a Google TTS (Text-to-Speech)
-        // Usiamo l'endpoint standard TTS di Google Cloud compatibile con la tua chiave.
         console.log("[STEP 2] Sto contattando Google per generare l'audio...");
 
         const requestBody = {
             input: { text: messaggioRicevuto },
-            voice: { languageCode: "it-IT", name: "it-IT-Neural2-A" }, // Voce italiana neurale di alta qualità
+            // Utilizzo di una voce italiana neurale (MP3)
+            voice: { languageCode: "it-IT", name: "it-IT-Neural2-A" }, 
             audioConfig: { audioEncoding: "MP3" }
         };
 
         const googleResponse = await axios.post(GOOGLE_TTS_URL, requestBody);
 
-        // STEP 3: Ricezione risposta da Google
-        console.log("[STEP 3] Risposta ricevuta da Google! Elaborazione audio...");
+        // STEP 3: Ricezione e salvataggio in RAM
+        console.log("[STEP 3] Risposta ricevuta da Google! Salvataggio audio in memoria RAM...");
 
         if (googleResponse.data && googleResponse.data.audioContent) {
-            // L'audio arriva come stringa codificata in Base64
-            const audioContentBase64 = googleResponse.data.audioContent;
-            
-            // Decodifica e salvataggio file
-            const buffer = Buffer.from(audioContentBase64, 'base64');
-            const filePath = path.join(__dirname, 'audio_generato.mp3');
-            
-            fs.writeFileSync(filePath, buffer);
+            // Salviamo la stringa Base64 direttamente in memoria
+            ultimoAudioBase64 = googleResponse.data.audioContent; 
 
-            // STEP 4: Conferma salvataggio
-            console.log(`[STEP 4] SUCCESSO! File audio salvato su Render in: ${filePath}`);
-            console.log(`[INFO] Dimensione file: ${buffer.length} bytes`);
+            // STEP 4: Conferma operazione
+            console.log(`[STEP 4] SUCCESSO! Contenuto audio (${ultimoAudioBase64.length} caratteri) salvato in memoria.`);
 
             // Risposta al client (pagina web)
             res.json({ 
                 status: 'successo', 
-                messaggio: 'Comando ricevuto e audio generato', 
-                testo: messaggioRicevuto,
-                audioSaved: true
+                messaggio: 'Comando ricevuto e audio salvato in memoria (non su disco)', 
+                testo: messaggioRicevuto
             });
 
         } else {
@@ -81,27 +74,36 @@ app.post('/api/comando', async (req, res) => {
         }
 
     } catch (error) {
-        console.error("[ERRORE STEP 3/4] Qualcosa è andato storto con Google o il salvataggio:");
+        console.error("[ERRORE STEP 3/4] Qualcosa è andato storto con Google:");
         console.error(error.response ? error.response.data : error.message);
         
         res.status(500).json({ 
             status: 'errore_audio', 
-            motivo: 'Fallimento generazione audio',
-            dettagli: error.message 
+            motivo: 'Fallimento generazione audio'
         });
     }
 });
 
-// 2. ROTTA GET: Per controllare stato e scaricare l'ultimo audio (opzionale per test)
-app.get('/audio', (req, res) => {
-    const filePath = path.join(__dirname, 'audio_generato.mp3');
-    if (fs.existsSync(filePath)) {
-        res.download(filePath);
+// 2. ROTTA GET: PER LA NODEMCU (Recupera l'ultimo audio Base64)
+// Indirizzo: https://ricevi-dati-da-arduino-e-invia.onrender.com/api/get_audio
+app.get('/api/get_audio', (req, res) => {
+    console.log(`[GET] Richiesta audio ricevuta. Invio ${ultimoAudioBase64 ? 'audio in Base64' : 'NIENTE'}...`);
+
+    if (ultimoAudioBase64) {
+        res.json({
+            status: 'disponibile',
+            testo: ultimoTestoGenerato,
+            audioBase64: ultimoAudioBase64 // Il dato che la NodeMCU dovrà scaricare
+        });
     } else {
-        res.status(404).send("Nessun file audio trovato. Invia prima un comando.");
+        res.status(404).json({
+            status: 'nessun_audio',
+            messaggio: 'Nessun comando inviato di recente per generare un audio.'
+        });
     }
 });
 
+// Avvio del server
 app.listen(PORT, () => {
     console.log(`Server in ascolto sulla porta ${PORT}`);
 });
