@@ -6,7 +6,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // Configurazione API Google (Gemini TTS)
-const GOOGLE_API_KEY = "AIzaSyAwolKBmgcWB3ZnXgdKw4l3URu8XlnZ4i0";
+// *** CHIAVE LETTA DA VARIABILE D'AMBIENTE (PIÙ SICURO) ***
+const GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
 // Nuovo endpoint per Gemini TTS (generative language API)
 const GEMINI_TTS_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${GOOGLE_API_KEY}`;
 
@@ -35,6 +36,12 @@ app.post('/api/comando', async (req, res) => {
         console.error("[ERRORE] Il messaggio è vuoto!");
         return res.status(400).json({ status: 'errore', motivo: 'Messaggio vuoto' });
     }
+    
+    // Verifica che la chiave API sia stata caricata correttamente
+    if (!GOOGLE_API_KEY) {
+        console.error("[ERRORE DI SICUREZZA] Variabile d'ambiente GEMINI_API_KEY non trovata.");
+        return res.status(500).json({ status: 'errore', motivo: 'Chiave API mancante nel server. Configurare GEMINI_API_KEY su Render.' });
+    }
 
     ultimoTestoGenerato = messaggioRicevuto;
 
@@ -50,7 +57,7 @@ app.post('/api/comando', async (req, res) => {
                 responseModalities: ["AUDIO"],
                 speechConfig: {
                     voiceConfig: {
-                        // Scegliamo una voce italiana predefinita, ad esempio "Kore" o lasciamo il default
+                        // Scegliamo una voce italiana predefinita, ad esempio "Kore"
                         prebuiltVoiceConfig: { voiceName: "Kore" } 
                     }
                 }
